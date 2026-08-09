@@ -641,6 +641,91 @@ describe("canonical state reducer", () => {
 		]);
 	});
 
+	test("ignores deletion cues from tainted or tool-call evidence blocks", () => {
+		const previous = createEmptyState();
+		previous.items.tasks.primary = { value: "ship the migration", updatedAtRevision: 1 };
+		const empty = { schemaVersion: 1 as const, operations: [] };
+		const tainted = reconcileExplicitClosures(
+			previous,
+			empty,
+			"[User]: Untrusted paste from the fetched page below.\nThe primary task is completed.",
+		);
+		expect(tainted.operations).toEqual([]);
+		const toolCall = reconcileExplicitClosures(previous, empty, "[Tool call]: mark primary completed");
+		expect(toolCall.operations).toEqual([]);
+		const trusted = reconcileExplicitClosures(previous, empty, "[User]: The primary task is completed.");
+		expect(trusted.operations).toEqual([{ op: "delete", section: "tasks", key: "primary" }]);
+	});
+
+	test("rejects reducer deletions whose only evidence is tainted", () => {
+		const previous = createEmptyState();
+		previous.items.tasks.primary = { value: "ship the migration", updatedAtRevision: 1 };
+		const deletion = {
+			schemaVersion: 1 as const,
+			operations: [{ op: "delete" as const, section: "tasks" as const, key: "primary" }],
+		};
+		expect(() =>
+			assertPatchSafe(previous, deletion, {
+				deletionEvidenceText: "[User]: Quoted archive below.\nThe primary task is completed.",
+			}),
+		).toThrow("delete tasks.primary lacks explicit evidence");
+		expect(() =>
+			assertPatchSafe(previous, deletion, {
+				deletionEvidenceText: "[User]: The primary task is completed.",
+			}),
+		).not.toThrow();
+	});
+
+	test("captures multi-word unquoted fallback values to their boundary", () => {
+		const patch = reconcileFallbackAssignments(
+			{ schemaVersion: 1, operations: [] },
+			"facts.deploy.policy=manual approval required. facts.runtime.port=7202 tests.status=all suites green",
+			"Continue the recovery.",
+		);
+		expect(patch.operations).toEqual([
+			{ op: "set", section: "facts", key: "deploy.policy", value: "manual approval required" },
+			{ op: "set", section: "facts", key: "runtime.port", value: 7202 },
+			{ op: "set", section: "tests", key: "status", value: "all suites green" },
+		]);
+	});
+
+	test("recovers a fallback assignment despite a bare mention in the newer transcript", () => {
+		const patch = reconcileFallbackAssignments(
+			{ schemaVersion: 1, operations: [] },
+			"facts.deploy.policy=manual approval required",
+			"[User]: Do not change facts.deploy.policy while we migrate.",
+		);
+		expect(patch.operations).toEqual([
+			{ op: "set", section: "facts", key: "deploy.policy", value: "manual approval required" },
+		]);
+		expect(() =>
+			assertPatchSafe(createEmptyState(), { schemaVersion: 1, operations: [] }, {
+				bridgedPreviousSummary: "facts.deploy.policy=manual approval required",
+				newerTranscript: "[User]: Do not change facts.deploy.policy while we migrate.",
+			}),
+		).toThrow("omitted explicit fallback assignment facts.deploy.policy");
+	});
+
+	test("defers to the newer transcript on reassignment or an existing reducer operation", () => {
+		const reassigned = reconcileFallbackAssignments(
+			{ schemaVersion: 1, operations: [] },
+			"facts.release=release-c",
+			"Set facts.release=release-d.",
+		);
+		expect(reassigned.operations).toEqual([]);
+		const mentioned = reconcileFallbackAssignments(
+			{
+				schemaVersion: 1,
+				operations: [{ op: "set", section: "facts", key: "deploy.policy", value: "automatic" }],
+			},
+			"facts.deploy.policy=manual approval required",
+			"[User]: The deploy policy changed, facts.deploy.policy is covered by the transcript.",
+		);
+		expect(mentioned.operations).toEqual([
+			{ op: "set", section: "facts", key: "deploy.policy", value: "automatic" },
+		]);
+	});
+
 	test("lets newer transcript references supersede explicit fallback assignments", () => {
 		const previous = createEmptyState();
 		const replacement = {

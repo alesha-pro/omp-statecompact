@@ -52,7 +52,7 @@ function estimateTokens(text: string): number {
 	return Math.ceil(text.length / 3.5);
 }
 
-function buildReducerInput(options: {
+export function buildReducerInput(options: {
 	state: CanonicalState;
 	transcript: string;
 	legacyPreviousSummary?: string;
@@ -66,7 +66,10 @@ function buildReducerInput(options: {
 		: "";
 	return [
 		"<existing_canonical_state>",
-		JSON.stringify(options.state),
+		// The state was built from redacted inputs, but regex redaction can
+		// miss a format once; without this pass that one miss would leak to
+		// the reducer on every later compaction.
+		redactSecrets(JSON.stringify(options.state)),
 		"</existing_canonical_state>",
 		legacy,
 		focus,

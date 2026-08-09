@@ -7,7 +7,7 @@
 Canonical mutable-state compaction for
 [Oh My Pi](https://github.com/can1357/oh-my-pi) coding sessions.
 
-[![CI](https://github.com/alesha-pro/omp-statecompact/actions/workflows/ci.yml/badge.svg)](https://github.com/alesha-pro/omp-statecompact/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.4.0-7c3aed) ![OMP](https://img.shields.io/badge/OMP-17.2.11-111827) ![Bun](https://img.shields.io/badge/Bun-1.3.14-f9f1e1) [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
+[![CI](https://github.com/alesha-pro/omp-statecompact/actions/workflows/ci.yml/badge.svg)](https://github.com/alesha-pro/omp-statecompact/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.4.1-7c3aed) ![OMP](https://img.shields.io/badge/OMP-17.2.11-111827) ![Bun](https://img.shields.io/badge/Bun-1.3.14-f9f1e1) [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
 
 ```bash
 omp plugin install github:alesha-pro/omp-statecompact

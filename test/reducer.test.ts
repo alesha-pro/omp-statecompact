@@ -1,5 +1,15 @@
 import { expect, test } from "bun:test";
+import { buildReducerInput } from "../src/index.ts";
 import { runReducerWithRepair } from "../src/reducer.ts";
+import { createEmptyState } from "../src/state.ts";
+
+test("redacts secrets from the canonical state block of the reducer input", () => {
+	const state = createEmptyState();
+	state.items.facts["ci.token"] = { value: "ghp_0123456789abcdef0123456789abcdef", updatedAtRevision: 1 };
+	const input = buildReducerInput({ state, transcript: "[User]: continue" });
+	expect(input).not.toContain("ghp_0123456789abcdef0123456789abcdef");
+	expect(input).toContain("[REDACTED TOKEN]");
+});
 
 test("repairs one rejected patch and records both usages", async () => {
 	const requests: string[] = [];

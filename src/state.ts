@@ -500,7 +500,10 @@ function hasDeletionEvidence(previous: CanonicalState, operation: PatchOperation
 	if (operation.op !== "delete" || !previous.items[operation.section][operation.key]) return true;
 	const previousValue = previous.items[operation.section][operation.key]?.value;
 	const needles = deletionNeedles(previous, operation);
-	const sentences = evidenceSentences(text);
+	// Deletion evidence follows the same authority rule as the other evidence
+	// reconcilers: assistant/tool-call blocks and sentences after an untrusted
+	// marker must not close or delete live state.
+	const sentences = authoritativeEvidenceBlocks(text).flatMap(block => block.sentences);
 	for (let index = 0; index < sentences.length; index += 1) {
 		const sentence = sentences[index];
 		if (!DELETE_CUE_RE.test(sentence)) continue;
@@ -526,7 +529,12 @@ function hasDeletionEvidence(previous: CanonicalState, operation: PatchOperation
 }
 
 function explicitAssignments(text: string): Array<{ section: StateSection; key: string; value: string }> {
-	const pattern = /\b(goals|constraints|facts|decisions|workspace|tests|tasks|blockers)\.([A-Za-z0-9][A-Za-z0-9._:/-]{0,159})\s*=\s*(?:"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|([^\s,;\n]+))/g;
+	// The unquoted branch runs to a value boundary instead of the first space:
+	// "facts.deploy.policy=manual approval required" must yield the full value,
+	// not "manual". Boundaries are a newline, ",", ";", a sentence-ending
+	// period, or the start of the next "key=" assignment.
+	const pattern =
+		/\b(goals|constraints|facts|decisions|workspace|tests|tasks|blockers)\.([A-Za-z0-9][A-Za-z0-9._:/-]{0,159})\s*=\s*(?:"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|((?:(?!\s+[A-Za-z0-9._:/-]+\s*=)(?!\.(?:\s|$))[^,;\n])+))/g;
 	const found = new Map<string, { section: StateSection; key: string; value: string }>();
 	for (const match of text.matchAll(pattern)) {
 		const section = match[1] as StateSection;
@@ -549,17 +557,36 @@ function parseExplicitAssignmentValue(raw: string): JsonValue {
 	return value;
 }
 
+// A bridged fallback assignment yields to the newer transcript only when the
+// transcript actually reassigns the path, or when it mentions the path and the
+// reducer emitted an operation for it (the reducer saw the mention and acted).
+// A bare mention with no reducer operation ("do not change facts.deploy.policy")
+// must not disable recovery: a mention is not an assignment.
+function newerTranscriptSupersedes(
+	newerTranscript: string,
+	fullPath: string,
+	patchTouchesKey: boolean,
+): boolean {
+	const lowerPath = fullPath.toLowerCase();
+	if (!newerTranscript.toLowerCase().includes(lowerPath)) return false;
+	if (patchTouchesKey) return true;
+	const escaped = lowerPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`${escaped}\\s*=`, "i").test(newerTranscript);
+}
+
 export function reconcileFallbackAssignments(
 	patch: StatePatch,
 	bridgedSummary: string | undefined,
 	newerTranscript: string,
 ): StatePatch {
 	if (!bridgedSummary) return patch;
-	const newer = newerTranscript.toLowerCase();
 	const operations = [...patch.operations];
 	for (const assignment of explicitAssignments(bridgedSummary)) {
 		const fullPath = `${assignment.section}.${assignment.key}`;
-		if (newer.includes(fullPath.toLowerCase())) continue;
+		const patchTouchesKey = patch.operations.some(
+			operation => operation.section === assignment.section && operation.key === assignment.key,
+		);
+		if (newerTranscriptSupersedes(newerTranscript, fullPath, patchTouchesKey)) continue;
 		for (let index = operations.length - 1; index >= 0; index -= 1) {
 			const operation = operations[index];
 			if (operation.section === assignment.section && operation.key === assignment.key) operations.splice(index, 1);
@@ -735,10 +762,12 @@ function assertFallbackAssignmentsPreserved(
 	bridgedSummary: string,
 	newerTranscript: string,
 ): void {
-	const newer = newerTranscript.toLowerCase();
 	for (const assignment of explicitAssignments(bridgedSummary)) {
 		const fullPath = `${assignment.section}.${assignment.key}`;
-		if (newer.includes(fullPath.toLowerCase())) continue;
+		const patchTouchesKey = patch.operations.some(
+			operation => operation.section === assignment.section && operation.key === assignment.key,
+		);
+		if (newerTranscriptSupersedes(newerTranscript, fullPath, patchTouchesKey)) continue;
 		const projected = projectedValue(previous, patch, assignment.section, assignment.key);
 		const rendered = typeof projected === "string" ? projected : projected === undefined ? "" : JSON.stringify(projected);
 		const expected = [assignment.value, assignment.value.replace(/[.;]$/, "")];
