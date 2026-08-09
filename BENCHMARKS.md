@@ -228,7 +228,7 @@ both compactions from the extension (8.33 s / 6.53 s), `cargo test` green,
 
 ## Release verification
 
-- 49 deterministic tests and TypeScript typecheck passed.
+- 69 deterministic tests and TypeScript typecheck passed.
 - The packed plugin installed into an isolated OMP environment and registered
   `/statecompact`, `/state`, and `/statecompact-debug`.
 - Production dependencies passed a high-severity audit and did not install a
@@ -236,6 +236,41 @@ both compactions from the extension (8.33 s / 6.53 s), `cargo test` green,
 - A packed-artifact dogfood session executed 20 real read/edit/write/bash tool
   calls, compacted twice, passed its project tests, and returned the exact final
   port, region, retry count, and test status.
+
+## 0.4.0 release verification (re-measured)
+
+Every number here was re-measured on the 0.4.0 release commit after the
+evidence-reconciler and guard hardening. Earlier sections keep the
+original measurements they describe.
+
+- **Iterative** (Qwen 3.6, 34 mutable fields, 3 compactions): 34/34
+  current at C1 and C3, 0 stale at every checkpoint (0/68, 0/136, 0/199),
+  final downstream 34/34. C2 fell back to native: the cross-section guard
+  correctly rejected a patch that kept epoch-stale `streaming.policy`
+  twins in constraints and facts, and the single repair attempt repeated
+  the slip. The fallback preserved revision 1 and C3 recovered to 34/34 —
+  the contradiction never entered canonical state.
+- **Incident** (28 fields): 28/28 at all three checkpoints, 0/164 stale,
+  compactions 10.2-11.6 s, downstream 28/28.
+- **Endurance** (10 compactions): 10/10 current at every checkpoint, 0/86
+  stale, revisions 1-10 all through the extension with zero fallbacks,
+  median 5.2 s, downstream 10/10.
+- **Semantic matrix** (3 scenarios x Qwen/DeepSeek): critical fields
+  48/48 on both arms; probe fields 75/78 (StateCompact) vs 77/78
+  (native); summary signals 60/60 vs 59/60; atomic options 157/158 both.
+  StateCompact compactions took 2.2-7.8 s vs native's 16.4-117.1 s. The
+  probe edge goes to native here; the mutable-state results and hook
+  latency, not semantic probes, carry the headline claim.
+- **Live requirement-churn dogfoods**: 4/4 PASS (http-service,
+  log-shipper, rust-fstats, json-migrate) under a frozen deterministic
+  harness — exact recall 27/27 fields total, zero stale leaks, zero
+  failure claims, all compactions through the extension. Comparison arms
+  on json-migrate: native matched recall but retained three stale values
+  and a failure narrative in an 11,063-char summary; cc-compact exceeded
+  the stock 30-second host limit on both compactions and fell back to
+  native (its effective stock behavior).
+- 69 deterministic tests, clean typecheck, packaged install and load
+  verified in an isolated OMP environment.
 
 ## Claim boundary
 

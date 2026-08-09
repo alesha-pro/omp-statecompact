@@ -78,10 +78,13 @@ remains available for recovery.
 
 ## Results at a glance
 
-In a harder six-way semantic-continuation matrix (three evolving projects,
-two compactions each, Qwen and DeepSeek session models), StateCompact 0.4.0
-recovered 78/78 fields and 48/48 critical fields. Native OMP recovered 71/78
-and 45/48. StateCompact completed all 12 hooks with no fallback.
+In the six-way semantic-continuation matrix re-measured on the 0.4.0
+release commit (three evolving projects, two compactions each, Qwen and
+DeepSeek session models), StateCompact and native OMP both recovered 48/48
+critical fields; probe recall was 75/78 vs 77/78 in native's favour, while
+StateCompact compacted 3-30x faster (2.2-7.8 s vs 16.4-117.1 s per hook)
+and ran every second-checkpoint hook through the extension within the host
+limit.
 
 Matched Qwen3.6-35B-A3B session, 120 turns, 34 mutable values, three
 compactions. StateCompact used Qwen3.7 Flash as reducer.
@@ -93,10 +96,10 @@ compactions. StateCompact used Qwen3.7 Flash as reducer.
 | Native OMP | 0/34 | current state dropped | 4,974 chars | 0/34 |
 | Slipstream 0.1.7 | 0/34 at C1 | 11/68 at C1 | 9,512 chars | not promoted |
 
-The endurance test ran 160 turns and ten consecutive compactions. StateCompact
-kept 10/10 current values and zero stale values at every checkpoint. One
-reducer timeout preserved the last good revision, used native fallback, and
-recovered on the following compaction.
+The endurance test ran 160 turns and ten consecutive compactions. On the
+0.4.0 release commit StateCompact kept 10/10 current values and zero stale
+values at every checkpoint, advanced revisions 1-10 with no fallback
+(median compaction 5.2 s), and answered the final downstream probe 10/10.
 
 [Read the complete methodology, competitor tournament, failure cases, and
 claim boundaries](BENCHMARKS.md).
@@ -191,7 +194,7 @@ bun install
 bun run release:check
 ```
 
-The release gate runs TypeScript checks, 49 deterministic tests, package
+The release gate runs TypeScript checks, 69 deterministic tests, package
 inspection, a production dependency audit, isolated installation, and a real
 OMP extension-load check.
 
