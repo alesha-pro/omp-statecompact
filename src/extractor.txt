@@ -8,13 +8,24 @@ Return exactly one compact JSON object and no markdown:
   "schemaVersion": 1,
   "set": {
     "goals": {
-      "primary": "ship the verified release"
+	  "purpose": "prevent duplicate delivery across retries",
+	  "primary": "ship the verified release"
+	},
+	"constraints": {
+	  "deploy.policy": "manual until crash recovery passes"
     },
-    "facts": {
-      "runtime.port": 8080
+	"decisions": {
+	  "delivery.storage": {
+		"choice": "transactional database inbox/outbox",
+		"rationale": ["survives restart", "prevents accepted work without a delivery job"],
+		"rejected": "memory-only deduplication"
+	  }
     },
-    "tasks": {
-      "primary": "run the release verifier"
+	"tests": {
+	  "release.gate": "214/214 passing; staging replay pending"
+	},
+	"tasks": {
+	  "primary": "run the staging replay"
     }
   },
   "delete": {
@@ -23,14 +34,14 @@ Return exactly one compact JSON object and no markdown:
   "continuationSummary": "A short, current-only handoff describing where work stands and what should happen next."
 }
 
-Allowed sections:
+Allowed sections (the only valid section names; continuationSummary is a top-level patch field, never a section):
 
-- goals: active objectives only
+- goals: durable project purpose and active objective; keep `purpose` separate from `primary`
 - constraints: active user/project requirements and prohibitions
 - facts: current values and externally established facts
-- decisions: active decisions and their rationale
+- decisions: active choices with their rationale and still-relevant rejected alternative
 - workspace: current branch, relevant paths, implementations and runtime state
-- tests: verification already run and its latest result
+- tests: latest decisive verification and unresolved verification gates
 - tasks: unfinished work only
 - blockers: unresolved blockers only
 
@@ -51,3 +62,15 @@ Rules:
 13. Never replace a goal with a task, and never delete an unchanged sibling task, blocker, constraint, or fact. Omission preserves existing state; deletion requires explicit evidence.
 14. Never set or delete workspace.files.read or workspace.files.modified. OMP updates those two keys deterministically from real tool events.
 15. A section/key MUST NEVER appear in both set and delete. A changed value belongs only in set. A removed value with no replacement belongs only in delete. Before returning JSON, remove every set/delete conflict.
+16. `set`, `delete`, and every section inside them MUST be JSON objects. Values inside a `set` section are keyed state items; never emit a bare array or prose string as a section. Values inside a `delete` section are arrays of stable keys.
+17. Project purpose is continuation-critical state. When the transcript states why the project exists, store it as `goals.purpose`; do not replace a specific purpose or goal with generic prose such as "ship the verified release".
+18. An ADR or explicit architecture decision belongs in `decisions`, not only in `facts`. Preserve the active choice, its causal rationale, and a rejected alternative only when avoiding that alternative remains an active guardrail.
+19. Preserve the latest decisive test result, still-valid earlier release evidence, and any still-open verification gate. Drop only an intermediate snapshot that a newer result actually supersedes. Store independent test streams as separate stable keys under `tests` (for example `tests.linux_macos`, `tests.windows`, `tests.poisoning_replay`); never aggregate tests under `facts.tests` where one update can erase an unchanged sibling. When the transcript explicitly says a named gate passed, keep an explicit pass result for that gate and repeat the gate name and pass status in the continuationSummary; metrics alone are not a substitute.
+20. The continuationSummary must be a self-contained current handoff. When known, include: project purpose, current goal, the complete current architecture and relevant paths, active decision and why, every current decisive verification result, open tasks in dependency order, active blocker, and next action. Stay concise, but never omit these merely to shorten the summary.
+21. Preserve current architecture twice when useful: the decision and rationale belong in `decisions`, while the current component topology and relationships belong in `facts.architecture`. Do not assume file names alone explain the architecture.
+22. Keep current implementation paths under `workspace.current_files`. Never store a deleted, removed, or obsolete path anywhere in current `workspace` or `facts`. A still-relevant rejected approach belongs in `decisions` or `constraints`; preserve the rejected method, not its obsolete path.
+23. On later revisions, NEVER replace a specific unchanged goal with a generic goal. Omit the goal key to preserve it. Reuse the existing test/task key when its status changes instead of creating a second generic sibling with a contradictory old value.
+24. In the continuationSummary, distinguish required choices from rejected alternatives and completed work from future gates. Explicitly say that a cutover, rollout, retention window, or deployment has not happened when confusing it with completed work would change the next action.
+25. Explicitly label the accepted or required choice and its rejected alternative in the continuationSummary when both remain relevant. A required manual approval, retained API boundary, or mandatory cutover is NOT a rejected option.
+26. continuationSummary is a top-level patch field only, a sibling of set/delete/operations. Never place continuationSummary inside set or delete, and never use it as a section name in an operation.
+27. Preserving a goal never means preserving its outdated parameters. When a mutable value quoted inside goals.purpose or any goal text is superseded (a sort order, port, flag name, path, default), rewrite that goal text to the current value while keeping the same intent. Keep current output artifact paths (for example out/report.jsonl) in workspace or facts; a CLI or service without its output destination is not continuable.

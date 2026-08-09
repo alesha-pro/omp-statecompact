@@ -26,6 +26,7 @@ test("repairs one rejected patch and records both usages", async () => {
 	expect(result.attemptUsages).toEqual([{ tokens: 10 }, { tokens: 12 }]);
 	expect(requests[1]).toContain("conflicting keys");
 	expect(requests[1]).toContain("bad");
+	expect(requests[1]).toContain('"set":{"constraints":{"deploy.policy":"manual"}}');
 });
 
 test("fails after the bounded second rejection", async () => {

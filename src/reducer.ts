@@ -27,7 +27,7 @@ function errorMessage(error: unknown): string {
 }
 
 function repairInput(baseInput: string, rejectedOutput: string, rejection: string): string {
-	return `${baseInput}\n\n<rejected_patch>\n${rejectedOutput}\n</rejected_patch>\nThe rejected patch failed validation: ${rejection}. Return one corrected JSON patch. Never repeat the validation error.`;
+	return `${baseInput}\n\n<rejected_patch>\n${rejectedOutput}\n</rejected_patch>\nThe rejected patch failed validation: ${rejection}. Return one corrected JSON patch. Never repeat the validation error. Schema reminder: every section inside set MUST be an object keyed by stable keys, for example \"set\":{\"constraints\":{\"deploy.policy\":\"manual\"}}. Every section inside delete MUST be an array of stable keys, for example \"delete\":{\"tasks\":[\"old.task\"]}. Never put arrays directly under set sections.`;
 }
 
 export async function runReducerWithRepair<TPatch>(options: ReducerRunOptions<TPatch>): Promise<ReducerRunResult<TPatch>> {

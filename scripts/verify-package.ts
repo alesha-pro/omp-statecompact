@@ -6,6 +6,7 @@ const projectDir = resolve(import.meta.dir, "..");
 const tempDir = await mkdtemp(join(tmpdir(), "omp-statecompact-package-"));
 const unpacked = join(tempDir, "package");
 const bun = Bun.which("bun");
+const INSTALL_TIMEOUT_MS = 300_000;
 if (!bun) throw new Error("Could not find the active bun executable on PATH");
 
 async function run(
@@ -53,7 +54,10 @@ try {
 		}
 	}
 
-	await run([bun, "install", "--production", "--ignore-scripts", "--save-text-lockfile"], { cwd: unpacked });
+	await run([bun, "install", "--production", "--ignore-scripts", "--save-text-lockfile"], {
+		cwd: unpacked,
+		timeoutMs: INSTALL_TIMEOUT_MS,
+	});
 	if (await Bun.file(join(unpacked, "node_modules", "@oh-my-pi", "pi-coding-agent", "package.json")).exists()) {
 		throw new Error("Production artifact installed a duplicate pi-coding-agent runtime");
 	}
@@ -67,7 +71,10 @@ try {
 		join(auditDir, "package.json"),
 		`${JSON.stringify({ name: "statecompact-runtime-audit", private: true, dependencies: packedManifest.dependencies ?? {} }, null, 2)}\n`,
 	);
-	await run([bun, "install", "--lockfile-only", "--save-text-lockfile"], { cwd: auditDir });
+	await run([bun, "install", "--lockfile-only", "--save-text-lockfile"], {
+		cwd: auditDir,
+		timeoutMs: INSTALL_TIMEOUT_MS,
+	});
 	await run([bun, "audit", "--audit-level=high"], { cwd: auditDir });
 	console.log("PASS production runtime dependency audit has no high-severity advisories");
 	await run(

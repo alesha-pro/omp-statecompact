@@ -1,7 +1,9 @@
 # Benchmarks
 
-Measured on 2026-08-08 with OMP 17.2.11 and Bun 1.3.14. StateCompact version
-was 0.3.0. These are single cloud runs, not provider-wide p50 or p95 claims.
+Measured on 2026-08-08 with OMP 17.2.11 and Bun 1.3.14. The original
+mutable-value tournament used StateCompact 0.3.0; the semantic-continuation
+matrix used 0.4.0. These are single cloud runs, not provider-wide p50 or p95
+claims.
 
 ## What the benchmark tests
 
@@ -26,6 +28,44 @@ rev-2 result: append-only short memory reached a median 10/34 gates, while one
 canonical slot per mutable value reached 34/34 and reduced median context by
 72.0% versus full history.
 
+## Semantic continuation matrix
+
+This second benchmark asks whether a new agent can actually continue three
+evolving engineering projects after two compactions. The scenarios cover a
+payment inbox/outbox repair, an immutable retrieval-index migration, and a
+cross-architecture build-cache fix. Each final model selects exact option IDs
+for purpose, architecture, decisions and rationale, completed work, current
+tests, open tasks, blockers, files, rejected approaches, guardrails, and the
+next action. Scoring is deterministic; there is no LLM judge.
+
+Session models were `openrouter/qwen/qwen3.6-35b-a3b` and
+`openrouter/deepseek/deepseek-v4-flash`. StateCompact used
+`openrouter/qwen/qwen3.7-flash` as its reducer.
+
+| Scenario / session model | Native fields | StateCompact fields | Native critical | StateCompact critical | Native atomic | StateCompact atomic |
+|---|---:|---:|---:|---:|---:|---:|
+| Payments / Qwen | 13/13 | 13/13 | 8/8 | 8/8 | 23/23 | 23/23 |
+| Payments / DeepSeek | 13/13 | 13/13 | 8/8 | 8/8 | 23/23 | 23/23 |
+| Retrieval / Qwen | 13/13 | 13/13 | 8/8 | 8/8 | 27/27 | 27/27 |
+| Retrieval / DeepSeek | 10/13 | 13/13 | 7/8 | 8/8 | 27/27 | 27/27 |
+| Build cache / Qwen | 9/13 | 13/13 | 6/8 | 8/8 | 26/29 | 29/29 |
+| Build cache / DeepSeek | 13/13 | 13/13 | 8/8 | 8/8 | 29/29 | 29/29 |
+| **Total** | **71/78** | **78/78** | **45/48** | **48/48** | **155/158** | **158/158** |
+
+StateCompact also covered 60/60 direct summary signals versus Native OMP's
+59/60. The matched run initially scored 58/60 because the canonical JSON put
+the word `rejected` before the rejected value. A deterministic display-only
+change added an explicit rejection marker after the value; rescoring the same
+persisted states produced 60/60 without another reducer or continuation call.
+
+Across the 12 compactions, median compaction latency was 4.71 seconds for
+StateCompact and 28.11 seconds for Native OMP (6.0x lower). Mean latency was
+4.19 versus 37.77 seconds. StateCompact completed 12/12 extension hooks with no
+native fallback. With the final renderer, average visible context was 4,358
+characters versus 4,521 for Native. The important result here is correctness:
+StateCompact was at least equal to Native in every scenario/model cell and
+strictly better in two of six.
+
 ## Main tournament
 
 Session model: `openrouter/qwen/qwen3.6-35b-a3b`. StateCompact reducer:
@@ -49,6 +89,31 @@ answer is scored normally. Snapcompact itself compacted locally in under one
 second, but requires a vision-capable model. StateCompact's final recall call
 was 3.0x faster and 1.62x cheaper in this run. This does not make StateCompact
 universally faster or cheaper.
+
+## Incident-firefight tournament
+
+A separate 120-turn scenario (`benchmark/scenario-incident.ts`) simulates an
+incident-command session: 28 mutable fields, seven lifecycle stages, literal
+A -> B -> A reverts, a revoked-and-reinstated feature flag, and a
+failing-to-passing test arc. Four arms ran on the same Qwen session model.
+Full detail: [benchmark/INCIDENT-TOURNAMENT.md](benchmark/INCIDENT-TOURNAMENT.md).
+
+| Arm | C1-C3 current | C1-C3 stale | C3 visible | Final exact |
+|---|---:|---:|---:|---:|
+| StateCompact (after evidence fix) | 28/28 every time | 0 every time | 5,136 chars | 28/28 |
+| StateCompact (before fix) | 28/28 every time | 53-56 leaked every time | 8,990 chars | 28/28 |
+| CC Compact 0.1.0 | 28/28 every time | 0 every time | 4,877 chars | 0/28 harness parse failure; 28/28 on manual content check |
+| OMP Snapcompact | N/A in text | N/A in text | 1,917 text chars + frames | 28/28 |
+| Native OMP | 5/28 -> 2/28 -> 0/28 | 0, 0, 2 | 4,190 chars | 0/28 |
+
+This scenario exposed a real defect: two deterministic evidence reconcilers
+in `src/state.ts` injected raw transcript sentences into the canonical state
+without currency checks and with only per-sentence non-authoritative
+filtering. The fix taints the rest of a transcript block after an untrusted
+marker and drops sentences whose `key=value` pairs a later authoritative
+update superseded. Post-fix rerun: 28/28 current and 0 stale at every
+checkpoint, 28/28 final recall, and no regression on the 34-field fixture
+(34/34, 0 stale, 34/34).
 
 ## Ten-compaction endurance
 
@@ -104,9 +169,66 @@ did not reproduce it. That older number is provider/model variance evidence,
 not a deterministic native OMP claim. OpenRouter reported $0 for both DeepSeek
 downstream calls, so no monetary comparison is made.
 
+## Live requirement-churn dogfood
+
+A real `openrouter/deepseek/deepseek-v4-flash` coding session (55 tool calls
+across ten prompts) built a Bun HTTP service under deliberately confusing
+requirements: port 4401 -> 5517 -> 4401, storage in-memory -> file ->
+in-memory, a requestId requirement added then revoked, POST /tasks renamed to
+POST /jobs, and a log-level default changed debug -> info. StateCompact
+(reducer `openrouter/qwen/qwen3.7-flash`) compacted twice (6.71 s and 6.14 s,
+both from the extension, revisions 1-2), an independent `bun test` passed, and
+a no-tools recall returned 7/7 exact fields with zero stale identifiers in the
+final summary.
+
+The first two attempts at this dogfood failed the stale scan and exposed two
+more evidence-reconciler defects, now fixed: tool-call invocations and
+assistant reasoning (thinking) were eligible evidence, so superseded code from
+`old_string` edits and abandoned reasoning leaked in; and completion cue words
+inside code (`task.completed`, `done: false`) triggered raw code quotes. The
+fixes skip tool-call/assistant evidence blocks, strip thinking from the
+reducer input, and exclude code-shaped sentences from completion evidence. A
+follow-up run restricted the evidence reconcilers to user and tool-result
+messages only (assistant prose is analysis, not proof).
+
+A second project (log-shipper CLI: output path, min-level default, batch size,
+format, and a flag rename, each churned and reverted) ran four times. The
+no-tools recall scored 7/7 exact fields on the last three consecutive runs.
+One run exposed a genuine state defect the fixtures had missed: the reducer
+left `constraints.default.severity=WARN` and `constraints.output.file=
+out/summary.jsonl` from epoch 1 while writing the reverted values under
+`facts`, producing a self-contradictory canonical state. A new deterministic
+guard in `assertPatchSafe` now rejects any patch whose projected state keeps
+one key in two sections with conflicting primitive values, and the repair
+loop returns it to the reducer with the exact conflict. Later runs produced
+contradiction-free states. Residual, non-blocking imperfections: the reducer
+once omitted a secondary key (the flag name) and once kept a parenthetical
+history mention in the continuation notes; the sanctioned
+`decisions.rejected` mechanism intentionally retains the revoked csv format.
+End-to-end recall was unaffected in every run.
+
+A third project moved the dogfood off Bun entirely: `rust-fstats`, a std-only
+Rust CLI (file stats as JSON) churned through pretty/compact output reverts,
+a revoked `--format csv`, a flag rename `--top` -> `--most-frequent` -> `--top`,
+and a field rename `uniqueWords` -> `distinctWords`, verified by an independent
+`cargo test`. The first full run exposed a real robustness defect: the reducer
+emitted `continuationSummary` as a patch *section*, `parseStatePatch` rejected
+it, the single retry repeated the identical slip, and compaction 1 fell back
+to native (`fromExtension: false`); the fallback-merge path still produced a
+7/7 recall. The parser now hoists a string `continuationSummary` slip to the
+top-level patch field instead of rejecting the whole patch (extractor rule 26
+plus two regression tests). Three further failures were measurement-layer
+artifacts, not state errors: the stale scan flagged rejected alternatives the
+extractor deliberately keeps (now context-aware), the required-marker scan was
+case-sensitive ("JSON" vs `json`), and the recall prompt left the `format`
+token unpinned (answered "JSON"). The final run: **PASS** — 105 tool calls,
+both compactions from the extension (8.33 s / 6.53 s), `cargo test` green,
+7/7 exact recall, zero summary misses, zero stale leaks
+(`benchmark/results/live-churn-rust-fstats-deepseek-qwen37-reducer/`).
+
 ## Release verification
 
-- 32 deterministic tests and TypeScript typecheck passed.
+- 49 deterministic tests and TypeScript typecheck passed.
 - The packed plugin installed into an isolated OMP environment and registered
   `/statecompact`, `/state`, and `/statecompact-debug`.
 - Production dependencies passed a high-severity audit and did not install a
@@ -123,5 +245,9 @@ the smallest judge-free text state among successful text arms, and was the only
 tested text plugin with zero stale values at all ten endurance checkpoints.
 
 This is not an absolute fastest or cheapest claim, and it does not cover every
-private or future plugin. Wider provider sampling and real long-running coding
-sessions remain necessary.
+private or future plugin. The incident-firefight tournament additionally
+showed that the deterministic evidence reconcilers could inject stale raw
+quotes into the canonical state; that defect is fixed and covered by
+regression tests, but similar prompt- and transcript-shape sensitivity cannot
+be ruled out. Wider provider sampling and real long-running coding sessions
+remain necessary.

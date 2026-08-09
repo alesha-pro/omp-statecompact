@@ -14,8 +14,12 @@ import {
 	findLatestPayload,
 	mergeFileHistory,
 	parseStatePatch,
+	reconcileExplicitCompletionEvidence,
+	reconcileExplicitClosures,
+	reconcileExplicitVerificationEvidence,
 	readPayload,
 	reconcileFallbackAssignments,
+	reconcileSpecificTestEvidence,
 	renderCanonicalState,
 	shouldBridgePreviousSummary,
 } from "./state.ts";
@@ -159,11 +163,25 @@ export default function stateCompact(pi: ExtensionAPI) {
 
 		const messages = [...event.preparation.messagesToSummarize, ...event.preparation.turnPrefixMessages];
 		let transcript: string;
+		let evidenceTranscript: string;
 		let state: CanonicalState;
 		let bridgedPreviousSummary: string | undefined;
 		let reducerInput: string;
 		try {
-			transcript = serializeConversationForSummary(pi.pi.convertToLlm(messages));
+			// Reasoning is transient scratch: it bloats the reducer input and
+			// leaks superseded speculation into the evidence reconcilers.
+			const llmMessages = pi.pi.convertToLlm(messages).map(message => {
+				if (!Array.isArray(message.content)) return message;
+				const content = message.content.filter(block => block.type !== "thinking");
+				return { ...message, content } as typeof message;
+			});
+			transcript = serializeConversationForSummary(llmMessages);
+			// The evidence reconcilers trust only user statements and tool
+			// results. Assistant text (including bare continuation blocks of
+			// multi-paragraph messages) is analysis, not proof.
+			evidenceTranscript = serializeConversationForSummary(
+				llmMessages.filter(message => message.role !== "assistant"),
+			);
 			state = previousState(event.preparation);
 			bridgedPreviousSummary = fallbackSummary(event.branchEntries, event.preparation.previousSummary);
 			reducerInput = buildReducerInput({
@@ -235,16 +253,23 @@ export default function stateCompact(pi: ExtensionAPI) {
 					};
 				},
 				parseAndValidate: output => {
-					const patch = reconcileFallbackAssignments(
+					let patch = reconcileFallbackAssignments(
 						parseStatePatch(output, config),
 						bridgedPreviousSummary,
 						transcript,
 					);
+					patch = reconcileSpecificTestEvidence(state, patch);
+					patch = reconcileExplicitVerificationEvidence(patch, redactSecrets(evidenceTranscript));
+					patch = reconcileExplicitCompletionEvidence(patch, redactSecrets(evidenceTranscript));
+					// Deletions follow the same evidence rule as the evidence
+					// reconcilers: an assistant claiming "done" without a user
+					// statement or tool result must not close or delete state.
+					patch = reconcileExplicitClosures(state, patch, evidenceTranscript);
 					if (state.revision === 0 && patch.operations.length === 0 && !patch.continuationSummary) {
 						throw new Error("initial state patch was empty");
 					}
 					assertPatchSafe(state, patch, {
-						deletionEvidenceText: transcript,
+						deletionEvidenceText: evidenceTranscript,
 						bridgedPreviousSummary,
 						newerTranscript: transcript,
 					});

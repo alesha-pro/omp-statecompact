@@ -7,7 +7,7 @@
 Canonical mutable-state compaction for
 [Oh My Pi](https://github.com/can1357/oh-my-pi) coding sessions.
 
-[![CI](https://github.com/alesha-pro/omp-statecompact/actions/workflows/ci.yml/badge.svg)](https://github.com/alesha-pro/omp-statecompact/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.3.0-7c3aed) ![OMP](https://img.shields.io/badge/OMP-17.2.11-111827) ![Bun](https://img.shields.io/badge/Bun-1.3.14-f9f1e1) [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
+[![CI](https://github.com/alesha-pro/omp-statecompact/actions/workflows/ci.yml/badge.svg)](https://github.com/alesha-pro/omp-statecompact/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.4.0-7c3aed) ![OMP](https://img.shields.io/badge/OMP-17.2.11-111827) ![Bun](https://img.shields.io/badge/Bun-1.3.14-f9f1e1) [![License: MIT](https://img.shields.io/badge/license-MIT-22c55e)](LICENSE)
 
 ```bash
 omp plugin install github:alesha-pro/omp-statecompact
@@ -77,6 +77,11 @@ unavailable, or unsafe, native compaction still runs and the last valid state
 remains available for recovery.
 
 ## Results at a glance
+
+In a harder six-way semantic-continuation matrix (three evolving projects,
+two compactions each, Qwen and DeepSeek session models), StateCompact 0.4.0
+recovered 78/78 fields and 48/48 critical fields. Native OMP recovered 71/78
+and 45/48. StateCompact completed all 12 hooks with no fallback.
 
 Matched Qwen3.6-35B-A3B session, 120 turns, 34 mutable values, three
 compactions. StateCompact used Qwen3.7 Flash as reducer.
@@ -186,7 +191,7 @@ bun install
 bun run release:check
 ```
 
-The release gate runs TypeScript checks, 32 deterministic tests, package
+The release gate runs TypeScript checks, 49 deterministic tests, package
 inspection, a production dependency audit, isolated installation, and a real
 OMP extension-load check.
 

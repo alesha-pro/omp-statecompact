@@ -9,5 +9,6 @@
     "allowImportingTsExtensions": true,
     "types": ["bun"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "benchmark/**/*.ts", "scripts/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "benchmark/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["benchmark/results", "benchmark/workspace", "benchmark/workspace-resilience", "benchmark/competitors"]
 }
