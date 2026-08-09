@@ -296,6 +296,20 @@ describe("canonical state reducer", () => {
 		expect(() => assertPatchSafe(previous, reconciled)).not.toThrow();
 	});
 
+	test("role keys may repeat across goals and tasks without conflicting", () => {
+		const previous = createEmptyState();
+		previous.items.goals.primary = { value: "ship the verified release", updatedAtRevision: 1 };
+		previous.items.tasks.primary = { value: "run the staging replay", updatedAtRevision: 1 };
+		const patch = {
+			schemaVersion: 1 as const,
+			operations: [
+				{ op: "set" as const, section: "goals" as const, key: "primary", value: "certify v3 stable" },
+				{ op: "set" as const, section: "tasks" as const, key: "primary", value: "rotate the root key" },
+			],
+		};
+		expect(() => assertPatchSafe(previous, patch)).not.toThrow();
+	});
+
 	test("detects a conflict against a pre-existing twin in an earlier section", () => {
 		const previous = createEmptyState();
 		previous.items.constraints.port = { value: "8080", updatedAtRevision: 1 };

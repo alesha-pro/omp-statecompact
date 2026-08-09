@@ -799,13 +799,20 @@ export function assertPatchSafe(previous: CanonicalState, patch: StatePatch, evi
 		);
 	}
 
-	// One stable key must not live in two sections with different primitive
-	// values: a reducer that writes the new value under facts while leaving
-	// its stale constraints twin untouched creates a self-contradictory
-	// state. Structured values (decision objects, file lists) are exempt
-	// because some keys are intentionally kept in two shapes.
+	// One stable key must not live in two mutable-value sections with
+	// different primitive values: a reducer that writes the new value under
+	// facts while leaving its stale constraints twin untouched creates a
+	// self-contradictory state. Only constraints/facts/workspace/tests
+	// participate: goals, tasks, blockers, and decisions use role keys
+	// (goals.primary and tasks.primary legitimately coexist — the extractor
+	// example itself does this). Structured values (decision objects, file
+	// lists) are exempt because some keys are intentionally kept in two
+	// shapes.
+	const isValueSection = (section: string): boolean =>
+		section === "constraints" || section === "facts" || section === "workspace" || section === "tests";
 	const projectedByKey = new Map<string, Map<string, JsonValue>>();
 	for (const section of STATE_SECTIONS) {
+		if (!isValueSection(section)) continue;
 		for (const [key, item] of Object.entries(previous.items[section])) {
 			if (section === "workspace" && (key === "files.read" || key === "files.modified")) continue;
 			const sections = projectedByKey.get(key) ?? new Map<string, JsonValue>();
@@ -818,6 +825,7 @@ export function assertPatchSafe(previous: CanonicalState, patch: StatePatch, evi
 	// surfaced the next time a reducer writes either twin.
 	const touchedKeys = new Set<string>();
 	for (const operation of patch.operations) {
+		if (!isValueSection(operation.section)) continue;
 		if (operation.section === "workspace" && (operation.key === "files.read" || operation.key === "files.modified")) continue;
 		touchedKeys.add(operation.key);
 		const sections = projectedByKey.get(operation.key) ?? new Map<string, JsonValue>();
