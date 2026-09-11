@@ -242,6 +242,10 @@ export default function stateCompact(pi: ExtensionAPI) {
 						},
 						{
 							apiKey,
+							// opencode-go/zen reject requests without x-opencode-session
+							// (400 MissingSessionID), so thread the session id like the
+							// host's own auxiliary calls do.
+							sessionId: ctx.sessionManager.getSessionId(),
 							maxTokens: config.maxOutputTokens,
 							temperature: 0,
 							disableReasoning: config.disableReasoning,
