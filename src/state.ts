@@ -459,19 +459,66 @@ function evidenceTokens(text: string): string[] {
 		.filter(token => token.length >= 4 && !EVIDENCE_STOP_TOKENS.has(token));
 }
 
-function hasTokenCoverage(scope: string, source: string): boolean {
-	const required = [...new Set(evidenceTokens(source))];
+interface PreparedText {
+	raw: string;
+	lower: string;
+	tokens?: string[];
+	tokenSet?: Set<string>;
+}
+
+interface DeletionCandidateWindow {
+	current: PreparedText;
+	currentRefersBack: boolean;
+	scope: PreparedText;
+	activeEntries: Array<{ prepared: PreparedText; isLast: boolean }>;
+}
+
+interface PreparedDeletionTarget {
+	lowerNeedles: string[];
+	keyTokens: string[];
+	valueTokens: string[];
+}
+
+function uniqueEvidenceTokens(text: string): string[] {
+	return [...new Set(evidenceTokens(text))];
+}
+
+function ensureTokens(prepared: PreparedText): { tokens: string[]; tokenSet: Set<string> } {
+	if (!prepared.tokens || !prepared.tokenSet) {
+		const tokens = uniqueEvidenceTokens(prepared.raw);
+		prepared.tokens = tokens;
+		prepared.tokenSet = new Set(tokens);
+	}
+	return { tokens: prepared.tokens, tokenSet: prepared.tokenSet };
+}
+
+function hasTokenCoveragePrepared(scope: PreparedText, required: string[]): boolean {
 	if (required.length < 2) return false;
-	const available = [...new Set(evidenceTokens(scope))];
-	const related = (left: string, right: string): boolean => {
-		if (left === right) return true;
-		if (Math.min(left.length, right.length) < 7) return false;
-		let prefix = 0;
-		while (prefix < left.length && prefix < right.length && left[prefix] === right[prefix]) prefix += 1;
-		return prefix >= 7;
-	};
-	const matches = required.filter(token => available.some(candidate => related(token, candidate))).length;
-	return matches >= Math.max(2, Math.ceil(required.length * 0.5));
+	const { tokens: available, tokenSet } = ensureTokens(scope);
+	const threshold = Math.max(2, Math.ceil(required.length * 0.5));
+	let matches = 0;
+	for (const token of required) {
+		if (tokenSet.has(token)) {
+			matches += 1;
+			if (matches >= threshold) return true;
+			continue;
+		}
+		if (token.length < 7) continue;
+		for (const candidate of available) {
+			if (candidate.length < 7) continue;
+			let prefix = 0;
+			while (prefix < token.length && prefix < candidate.length && token[prefix] === candidate[prefix]) {
+				prefix += 1;
+				if (prefix >= 7) break;
+			}
+			if (prefix >= 7) {
+				matches += 1;
+				if (matches >= threshold) return true;
+				break;
+			}
+		}
+	}
+	return matches >= threshold;
 }
 
 function deletionNeedles(previous: CanonicalState, operation: PatchOperation): string[] {
@@ -484,26 +531,49 @@ function deletionNeedles(previous: CanonicalState, operation: PatchOperation): s
 	return needles;
 }
 
-function mentionsDeletionTarget(
-	text: string,
-	operation: PatchOperation,
-	previousValue: JsonValue | undefined,
-	needles: string[],
-): boolean {
-	const lower = text.toLowerCase();
-	if (needles.some(needle => lower.includes(needle.toLowerCase()))) return true;
-	if (hasTokenCoverage(text, operation.key)) return true;
-	return typeof previousValue === "string" && hasTokenCoverage(text, previousValue);
+function prepareDeletionTarget(previous: CanonicalState, operation: PatchOperation): PreparedDeletionTarget {
+	const previousValue = previous.items[operation.section][operation.key]?.value;
+	return {
+		lowerNeedles: deletionNeedles(previous, operation).map(needle => needle.toLowerCase()),
+		keyTokens: uniqueEvidenceTokens(operation.key),
+		valueTokens: typeof previousValue === "string" ? uniqueEvidenceTokens(previousValue) : [],
+	};
 }
 
-function hasDeletionEvidence(previous: CanonicalState, operation: PatchOperation, text: string): boolean {
-	if (operation.op !== "delete" || !previous.items[operation.section][operation.key]) return true;
-	const previousValue = previous.items[operation.section][operation.key]?.value;
-	const needles = deletionNeedles(previous, operation);
+function mentionsPreparedDeletionTarget(text: PreparedText, target: PreparedDeletionTarget): boolean {
+	for (const needle of target.lowerNeedles) {
+		if (text.lower.includes(needle)) return true;
+	}
+	if (hasTokenCoveragePrepared(text, target.keyTokens)) return true;
+	return target.valueTokens.length >= 2 && hasTokenCoveragePrepared(text, target.valueTokens);
+}
+
+function buildDeletionEvidenceIndex(text: string): DeletionCandidateWindow[] {
 	// Deletion evidence follows the same authority rule as the other evidence
 	// reconcilers: assistant/tool-call blocks and sentences after an untrusted
 	// marker must not close or delete live state.
 	const sentences = authoritativeEvidenceBlocks(text).flatMap(block => block.sentences);
+	const preparedSentences = new Map<number, PreparedText>();
+	const activeCueFlags = new Map<number, boolean>();
+	const getPrepared = (index: number): PreparedText => {
+		let entry = preparedSentences.get(index);
+		if (!entry) {
+			const raw = sentences[index];
+			entry = { raw, lower: raw.toLowerCase() };
+			preparedSentences.set(index, entry);
+		}
+		return entry;
+	};
+	const isActiveCue = (index: number): boolean => {
+		let flag = activeCueFlags.get(index);
+		if (flag === undefined) {
+			flag = ACTIVE_STATE_CUE_RE.test(sentences[index]);
+			activeCueFlags.set(index, flag);
+		}
+		return flag;
+	};
+
+	const windows: DeletionCandidateWindow[] = [];
 	for (let index = 0; index < sentences.length; index += 1) {
 		const sentence = sentences[index];
 		if (!DELETE_CUE_RE.test(sentence)) continue;
@@ -511,19 +581,55 @@ function hasDeletionEvidence(previous: CanonicalState, operation: PatchOperation
 		// first sentence names the remaining shards, the next reports 100%, and
 		// the third says the backfill is complete. Never borrow following text.
 		const start = Math.max(0, index - 2);
-		const scopeSentences = sentences.slice(start, index + 1);
-		const currentNamesTarget = mentionsDeletionTarget(sentence, operation, previousValue, needles);
-		const currentRefersBack = REFERENTIAL_COMPLETION_RE.test(sentence);
-		const contradictoryActiveState = scopeSentences.some((candidate, candidateIndex) => {
-			if (!ACTIVE_STATE_CUE_RE.test(candidate)) return false;
-			if (!mentionsDeletionTarget(candidate, operation, previousValue, needles)) return false;
-			// A later, target-specific completion or explicit anaphora supersedes an
-			// earlier "pending" status. An unrelated completion does not.
-			return candidateIndex === scopeSentences.length - 1 || (!currentNamesTarget && !currentRefersBack);
+		const activeEntries: Array<{ prepared: PreparedText; isLast: boolean }> = [];
+		for (let candidateIndex = start; candidateIndex <= index; candidateIndex += 1) {
+			if (isActiveCue(candidateIndex)) {
+				activeEntries.push({
+					prepared: getPrepared(candidateIndex),
+					isLast: candidateIndex === index,
+				});
+			}
+		}
+		const scopeRaw = start === index ? sentence : sentences.slice(start, index + 1).join(" ");
+		windows.push({
+			current: getPrepared(index),
+			currentRefersBack: REFERENTIAL_COMPLETION_RE.test(sentence),
+			scope: start === index ? getPrepared(index) : { raw: scopeRaw, lower: scopeRaw.toLowerCase() },
+			activeEntries,
 		});
-		if (contradictoryActiveState) continue;
-		const scope = scopeSentences.join(" ");
-		if (mentionsDeletionTarget(scope, operation, previousValue, needles)) return true;
+	}
+	return windows;
+}
+
+function hasDeletionEvidenceIndexed(
+	previous: CanonicalState,
+	operation: PatchOperation,
+	windows: readonly DeletionCandidateWindow[],
+): boolean {
+	if (operation.op !== "delete" || !previous.items[operation.section][operation.key]) return true;
+	if (windows.length === 0) return false;
+	const target = prepareDeletionTarget(previous, operation);
+	for (const window of windows) {
+		if (window.activeEntries.length > 0) {
+			let currentNamesTarget: boolean | undefined;
+			let contradictoryActiveState = false;
+			for (const entry of window.activeEntries) {
+				if (!mentionsPreparedDeletionTarget(entry.prepared, target)) continue;
+				if (entry.isLast) {
+					contradictoryActiveState = true;
+					break;
+				}
+				if (!window.currentRefersBack) {
+					currentNamesTarget ??= mentionsPreparedDeletionTarget(window.current, target);
+					if (!currentNamesTarget) {
+						contradictoryActiveState = true;
+						break;
+					}
+				}
+			}
+			if (contradictoryActiveState) continue;
+		}
+		if (mentionsPreparedDeletionTarget(window.scope, target)) return true;
 	}
 	return false;
 }
@@ -608,11 +714,13 @@ export function reconcileExplicitClosures(
 ): StatePatch {
 	const operations = [...patch.operations];
 	const touched = new Set(operations.map(operation => `${operation.section}\u0000${operation.key}`));
+	let deletionWindows: DeletionCandidateWindow[] | undefined;
 	for (const section of ["tasks", "blockers"] as const) {
 		for (const key of Object.keys(previous.items[section])) {
 			if (touched.has(`${section}\u0000${key}`)) continue;
+			deletionWindows ??= buildDeletionEvidenceIndex(transcript);
 			const deletion: PatchOperation = { op: "delete", section, key };
-			if (hasDeletionEvidence(previous, deletion, transcript)) operations.push(deletion);
+			if (hasDeletionEvidenceIndexed(previous, deletion, deletionWindows)) operations.push(deletion);
 		}
 	}
 	return { ...patch, operations };
@@ -786,8 +894,11 @@ export function assertPatchSafe(previous: CanonicalState, patch: StatePatch, evi
 		throw new Error(`Unsafe state patch: ${conflictingKeys.length} keys are both set and deleted`);
 	}
 	if (evidence.deletionEvidenceText) {
+		let deletionWindows: DeletionCandidateWindow[] | undefined;
 		for (const operation of patch.operations) {
-			if (!hasDeletionEvidence(previous, operation, evidence.deletionEvidenceText)) {
+			if (operation.op !== "delete" || !previous.items[operation.section][operation.key]) continue;
+			deletionWindows ??= buildDeletionEvidenceIndex(evidence.deletionEvidenceText);
+			if (!hasDeletionEvidenceIndexed(previous, operation, deletionWindows)) {
 				throw new Error(`Unsafe state patch: delete ${operation.section}.${operation.key} lacks explicit evidence`);
 			}
 		}
